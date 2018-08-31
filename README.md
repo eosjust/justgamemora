@@ -204,13 +204,16 @@ tp.eosTokenTransfer({
     memo: 'joineos:1;R,R,R;B'
 }).then(console.log);
 ```
-4.审判游戏结果
+4.房主获取游戏结果
+
+轮询mygame表时，如果mygame表中的记录出现winner，认为本局结束
+此时前端需要展示确认按钮，房主点确认，发送confirmgame的action，并收到合约打钱
 ```
 tp.pushEosAction({
     actions: [
          {
             account: "justgamemora",
-            name: "jurgegame",
+            name: "confirmgame",
             authorization: [
                 {
                 actor: '$youraccount',
@@ -218,8 +221,8 @@ tp.pushEosAction({
                 }
             ],
             data: {
-                gameid: '$gameid',//从rungame表中获得的id
-                user: '$youraccount'//为房主
+                gameid: '$gameid',//从房主mygame表中获得的id
+                player: '$youraccount'//为房主
             }
         }
     ]

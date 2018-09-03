@@ -23,12 +23,15 @@ tp.getWalletList('eos').then(console.log)
     account_name player2;//玩家2，加入游戏的玩家
     account_name code;//发币的账户，justgamemora表示是自己，eosio.token表示是官方eos
     asset balance;//代币数量
+    uint64_t mrkeyid;//本局游戏加密使用的keyid
     std::string guess1;//玩家1的猜拳
     std::string guess2;//玩家2的猜拳
     std::string coin1;//玩家1的投币
     std::string coin2;//玩家2的投币
     std::string randcoin;//系统产生的投币
     account_name winner;//判定的赢家
+    asset winasset;//赢家收获
+    asset loseasset;//输家收获
     time createtime;//游戏开始时间
     time starttime;//游戏开始时间
     time endtime;//游戏结束时间

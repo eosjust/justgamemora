@@ -1,20 +1,19 @@
-#include <algorithm>
+#include <ctime>
 #include <eosiolib/asset.hpp>
 #include <eosiolib/currency.hpp>
 #include <eosiolib/db.h>
 #include <eosiolib/eosio.hpp>
+#include <eosiolib/multi_index.hpp>
 #include <string>
 #include <vector>
-
-#include <eosiolib/multi_index.hpp>
-#include <eosiolib/print.hpp>
-#include <time.h>
 
 using namespace eosio;
 using namespace std;
 
 class mora : public eosio::contract {
 private:
+  account_name util_ram_payer = N(justgamemora);
+
   //@abi table accounts i64
   struct account {
     asset balance;
@@ -22,6 +21,7 @@ private:
     uint64_t primary_key() const { return balance.symbol.name(); }
   };
   typedef eosio::multi_index<N(accounts), account> accounts;
+
   //@abi table stat i64
   struct stat {
     asset supply;
@@ -32,21 +32,35 @@ private:
   };
   typedef eosio::multi_index<N(stat), stat> stats;
 
-  //@abi table accstate i64
+  //@abi table accstates i64
   struct accstate {
     account_name account;
     time last_airdrop_claim_time;
     asset eos_balance;
-
     uint64_t primary_key() const { return account; }
-
     EOSLIB_SERIALIZE(accstate, (account)(last_airdrop_claim_time)(eos_balance))
   };
   typedef eosio::multi_index<N(accstates), accstate> accstates;
 
+  struct lastrand {
+    uint64_t id;
+    int32_t rand;
+    uint64_t primary_key() const { return id; }
+    EOSLIB_SERIALIZE(lastrand, (id)(rand))
+  };
+  typedef eosio::multi_index<N(lastrand), lastrand> lastrands;
+
+  //@abi table mrswap i64
+  struct mrswap {
+    account_name contract;
+    std::string text;
+    account_name primary_key() const { return contract; }
+    EOSLIB_SERIALIZE(mrswap, (contract)(text))
+  };
+  typedef eosio::multi_index<N(mrswap), mrswap> mrswaps;
+
   //@abi table allgame i64
   //@abi table opengame i64
-  //@abi table rungame i64
   //@abi table historygame i64
   //@abi table mygame i64
   struct moragame {
@@ -55,26 +69,28 @@ private:
     account_name player2;
     account_name code;
     asset balance;
+    uint64_t keytype;
+    uint64_t keyid;
     std::string guess1;
     std::string guess2;
     std::string coin1;
     std::string coin2;
     std::string randcoin;
     account_name winner;
-
+    asset winasset;
+    asset loseasset;
     time createtime;
     time starttime;
     time endtime;
     uint64_t primary_key() const { return id; }
-    EOSLIB_SERIALIZE(
-        moragame, (id)(player1)(player2)(code)(balance)(guess1)(guess2)(coin1)(
-                      coin2)(randcoin)(winner)(createtime)(starttime)(endtime))
+    EOSLIB_SERIALIZE(moragame,
+                     (id)(player1)(player2)(code)(balance)(keytype)(keyid)(
+                         guess1)(guess2)(coin1)(coin2)(randcoin)(winner)(
+                         winasset)(loseasset)(createtime)(starttime)(endtime))
   };
   typedef eosio::multi_index<N(allgame), moragame> allgames;
 
   typedef eosio::multi_index<N(opengame), moragame> opengames;
-
-  typedef eosio::multi_index<N(rungame), moragame> rungames;
 
   typedef eosio::multi_index<N(historygame), moragame> historygames;
 
@@ -107,7 +123,6 @@ private:
     sub_balance(from, quantity);
     add_balance(to, quantity, ram_payer);
   }
-
   //分割字符串
   void splitstring(const std::string &s, std::vector<std::string> &v,
                    const std::string &c) {
@@ -136,7 +151,42 @@ private:
     }
     return "";
   }
+  int srand_next(int seed) {
+    const int a = 16807; // 16807 法
+    const int b = 0;
+    const int m = 2147483647;                          // MAX_INT
+    const int q = m / a;                               // q = m / a;
+    const int r = m % a;                               // r = m % a;
+    int _z = a * (seed % q) - r * (int)(seed / q) + b; // 计算 mod
+    if (_z < 0)
+      _z += m; // 将结果调整到 0 ~ m
+    return _z;
+  }
 
+  int rand() {
+    lastrands lastrandtable(N(justgamemora), N(justgamemora));
+    auto randitem = lastrandtable.find(0);
+    int lastrand = 0;
+    bool needmodify = false;
+    if (randitem == lastrandtable.end()) {
+      lastrandtable.emplace(util_ram_payer, [&](auto &s) {
+        s.id = 0;
+        s.rand = 16807;
+      });
+      lastrand = 16807;
+    } else {
+      needmodify = true;
+      lastrand = randitem->rand;
+      lastrand = srand_next(lastrand);
+    }
+    if (needmodify) {
+      lastrandtable.modify(randitem, util_ram_payer, [&](auto &s) {
+        s.id = 0;
+        s.rand = lastrand;
+      });
+    }
+    return lastrand;
+  }
   //判决两个结果
   int jurge(vector<std::string> guess1, vector<std::string> guess2,
             std::string randcoin) {
@@ -167,7 +217,7 @@ private:
   //系统随机产生硬币正反面
   std::string getRandCoin() {
     time t = now();
-    uint32_t it = (uint32_t)t;
+    int it = rand();
     int p = it % 2;
     if (p == 0) {
       return "B";
@@ -178,12 +228,12 @@ private:
   //检查guess参数是否合法
   // TODO guess coin 检查
   int checkGuessLegal(std::string guess) {
-    if (guess.size() !=5) {
+    if (guess.size() != 5) {
       return 0;
     }
     std::vector<std::string> guessVector;
-    splitstring(guess,guessVector,",");
-    if(guessVector.size()!=3){
+    splitstring(guess, guessVector, ",");
+    if (guessVector.size() != 3) {
       return 0;
     }
     int ret = 1;
@@ -209,15 +259,9 @@ private:
     return ret;
   }
 
-  uint64_t string2int(std::string str) {
-    uint64_t x = stoull(str);
-    return x;
-  }
-  std::string int2string(uint64_t val) { return std::to_string(val); }
-
   void opennewgame(account_name player, account_name code,
                    account_name rampayer, asset quantity, std::string guess,
-                   std::string coin);
+                   std::string coin, uint64_t keytype, uint64_t keyid);
 
   void joingame(uint64_t gameid, account_name player, account_name code,
                 account_name rampayer, asset quantity, std::string guess,
@@ -233,13 +277,6 @@ public:
 
   inline asset get_supply(symbol_name sym) const;
   inline asset get_balance(account_name owner, symbol_name sym) const;
-  struct transfer_args {
-    account_name from;
-    account_name to;
-    asset quantity;
-    string memo;
-  };
-
   void on(const currency::transfer &t, account_name code);
   void apply(account_name code, account_name action);
   void create(account_name issuer, asset maximum_supply);
@@ -248,7 +285,7 @@ public:
                 string memo);
 
   // @abi action
-  void hi(account_name player1, account_name player2);
+  void hi(account_name user);
 
   // @abi action
   void eraseall(account_name user);
@@ -259,10 +296,30 @@ public:
   void playfree(account_name player, asset quantity, std::string guess,
                 std::string coin);
   // @abi action
+  void playfree2(account_name player, asset quantity, std::string guess,
+                 std::string coin, uint64_t keytype, uint64_t keyid);
+  // @abi action
   void joinfree(uint64_t gameid, account_name player, std::string guess,
                 std::string coin);
   // @abi action
+  void test(account_name from,account_name to);
+
+  // @abi action
+  void encrypt(account_name contract,account_name user,uint64_t keytype,uint64_t keyid,std::string ptext);
+
+  // @abi action
   void jurgegame(uint64_t gameid, account_name user);
+
+  // @abi action
+  void confirmgame(uint64_t gameid, account_name player);
+
+public:
+  struct transfer_args {
+    account_name from;
+    account_name to;
+    asset quantity;
+    string memo;
+  };
 };
 
 asset mora::get_supply(symbol_name sym) const {

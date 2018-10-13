@@ -74,13 +74,20 @@ void mora::playeos(account_name player, account_name code, asset quantity,
                    std::string argStr) {
   vector<std::string> argVector;
   splitstring(argStr, argVector, ";");
-  eosio_assert(argVector.size() == 2, "arg num not right");
+  eosio_assert(argVector.size() < 2, "arg num not right");
+
   std::string guessStr = argVector[0];
   std::string coinStr = argVector[1];
+  if (argVector.size() > 2) {
+    uint64_t keytype = stoull(argVector[2]);
+    uint64_t keyid = stoull(argVector[3]);
+    opennewgame(player, code, _self, quantity, guessStr, coinStr, keytype,
+                keyid);
+  } else {
+    opennewgame(player, code, _self, quantity, guessStr, coinStr, 0, 0);
+  }
   // TODO 加解密
-  opennewgame(player, code, _self, quantity, guessStr, coinStr);
 }
-
 void mora::playfree(account_name player, asset quantity, std::string guess,
                     std::string coin) {
   require_auth(player);
@@ -89,16 +96,25 @@ void mora::playfree(account_name player, asset quantity, std::string guess,
   eosio_assert(quantity.is_valid(), "invalid quantity");
   eosio_assert(quantity.amount > 0, "must deposit positive quantity");
   mtransfer(player, _self, quantity, player);
-  opennewgame(player, _self, player, quantity, guess, coin);
+  opennewgame(player, _self, player, quantity, guess, coin, 0, 0);
+}
+void mora::playfree2(account_name player, asset quantity, std::string guess,
+                     std::string coin, uint64_t keytype, uint64_t keyid) {
+  require_auth(player);
+  eosio_assert(quantity.symbol == string_to_symbol(4, "MORA"),
+               "unsupported symbol name");
+  eosio_assert(quantity.is_valid(), "invalid quantity");
+  eosio_assert(quantity.amount > 0, "must deposit positive quantity");
+  mtransfer(player, _self, quantity, player);
+  opennewgame(player, _self, player, quantity, guess, coin, keytype, keyid);
 }
 
 void mora::opennewgame(account_name player, account_name code,
                        account_name rampayer, asset quantity, std::string guess,
-                       std::string coin) {
+                       std::string coin, uint64_t keytype, uint64_t keyid) {
   allgames allgametable(_self, _self);
   opengames opengametable(_self, _self);
   mygames mygametable(_self, player);
-  historygames historygametable(_self, player);
   std::string guess1 = guess;
   std::string coin1 = coin;
   eosio_assert(checkGuessLegal(guess1) == 1, "guess arg is illegal");
@@ -110,6 +126,8 @@ void mora::opennewgame(account_name player, account_name code,
     game.player1 = player;
     game.guess1 = guess1;
     game.coin1 = coin1;
+    game.keytype = keytype;
+    game.keyid = keyid;
     game.code = code;
     game.createtime = nowtime;
     game.balance = quantity;
@@ -132,15 +150,6 @@ void mora::opennewgame(account_name player, account_name code,
     game.createtime = nowtime;
     game.balance = quantity;
   });
-  historygametable.emplace(rampayer, [&](auto &game) {
-    game.id = gameid;
-    game.player1 = player;
-    game.guess1 = guess1;
-    game.coin1 = coin1;
-    game.code = code;
-    game.createtime = nowtime;
-    game.balance = quantity;
-  });
 }
 void mora::joineos(account_name player, account_name code, asset quantity,
                    std::string argStr) {
@@ -150,7 +159,7 @@ void mora::joineos(account_name player, account_name code, asset quantity,
   std::string gameidStr = argVector[0];
   std::string guessStr = argVector[1];
   std::string coinStr = argVector[2];
-  uint64_t gameid = string2int(gameidStr);
+  uint64_t gameid = stoull(gameidStr);
   // eosio_assert(gameid > 0, "gameid must be positive");
 
   allgames allgametable(_self, _self);
@@ -186,7 +195,6 @@ void mora::joingame(uint64_t gameid, account_name player, account_name code,
   time nowtime = now();
   allgames allgametable(_self, _self);
   opengames opengametable(_self, _self);
-  rungames rungametable(_self, _self);
   auto itemallgame = allgametable.find(gameid);
   auto itemopengame = opengametable.find(gameid);
   eosio_assert(itemallgame != allgametable.end(), "there isnt any game");
@@ -199,59 +207,72 @@ void mora::joingame(uint64_t gameid, account_name player, account_name code,
                "player2 coin cant equal with player1");
   account_name player1 = itemallgame->player1;
   mygames mygametable1(_self, player1);
-  mygames mygametable2(_self, player2);
-  historygames historygametable1(_self, player1);
   historygames historygametable2(_self, player2);
   auto itemmygame1 = mygametable1.find(gameid);
-  auto itemhistorygame1 = historygametable1.find(gameid);
   eosio_assert(itemmygame1 != mygametable1.end(), "player1 game not found");
-  eosio_assert(itemhistorygame1 != historygametable1.end(),
-               "game history not found");
-  // allgame,opengame,rungame,mygame,historygame
+
+  string guess1 = itemallgame->guess1;
+
+  string coin1 = itemallgame->coin1;
+  vector<string> guessVector1;
+  vector<string> guessVector2;
+  splitstring(guess1, guessVector1, ",");
+  splitstring(guess2, guessVector2, ",");
+  guessVector1.push_back(coin1);
+  guessVector2.push_back(coin2);
+  std::string randcoin = getRandCoin();
+
+  float loselucky = 0.1 + (rand() % 66) * 0.01;
+  uint64_t totalfee = itemallgame->balance.amount * 2;
+  uint64_t devfee = totalfee * 0.1;
+  uint64_t losefee = totalfee * loselucky;
+  uint64_t winfee = totalfee - devfee - losefee;
+  asset winasset = asset(winfee, itemallgame->balance.symbol);
+  asset loseasset = asset(losefee, itemallgame->balance.symbol);
+
+  int winret = jurge(guessVector1, guessVector2, randcoin);
+  account_name winner = player2;
+  asset player2asset = winasset;
+  if (winret > 0) {
+    winner = player1;
+    player2asset = loseasset;
+  } else {
+    winner = player2;
+    player2asset = winasset;
+  }
+
+  symbol_type symbol_type_eos{S(4, EOS)};
+  symbol_type symbol_type_mora{S(4, MORA)};
+  if (itemallgame->code == N(eosio.token) &&
+      itemallgame->balance.symbol == symbol_type_eos) {
+    action(permission_level{_self, N(active)}, N(eosio.token), N(transfer),
+           make_tuple(_self, player2, player2asset, std::string("")))
+        .send();
+  } else if (itemallgame->code == N(justgamemora) &&
+             itemallgame->balance.symbol == symbol_type_mora) {
+    mtransfer(_self, player2, player2asset, player2);
+  }
+
+  opengametable.erase(itemopengame);
   allgametable.modify(itemallgame, _self, [&](auto &a) {
     a.player2 = player2;
     a.guess2 = guess2;
     a.coin2 = coin2;
     a.starttime = nowtime;
-  });
-  opengametable.erase(itemopengame);
-  rungametable.emplace(rampayer, [&](auto &a) {
-    a.id = itemallgame->id;
-    a.player1 = itemallgame->player1;
-    a.player2 = itemallgame->player2;
-    a.balance = itemallgame->balance;
-    a.code = itemallgame->code;
-    a.guess1 = itemallgame->guess1;
-    a.guess2 = guess2;
-    a.coin1 = itemallgame->coin1;
-    a.coin2 = coin2;
-    a.createtime = itemallgame->createtime;
-    a.starttime = nowtime;
+    a.winner = winner;
+    a.winasset = winasset;
+    a.loseasset = loseasset;
+    a.randcoin = randcoin;
   });
   mygametable1.modify(itemmygame1, rampayer, [&](auto &a) {
     a.player2 = player2;
     a.guess2 = guess2;
     a.coin2 = coin2;
     a.starttime = nowtime;
-  });
-  historygametable1.modify(itemhistorygame1, rampayer, [&](auto &a) {
-    a.player2 = player2;
-    a.guess2 = guess2;
-    a.coin2 = coin2;
-    a.starttime = nowtime;
-  });
-  mygametable2.emplace(rampayer, [&](auto &a) {
-    a.id = itemallgame->id;
-    a.player1 = itemallgame->player1;
-    a.player2 = itemallgame->player2;
-    a.balance = itemallgame->balance;
-    a.code = itemallgame->code;
-    a.guess1 = itemallgame->guess1;
-    a.guess2 = guess2;
-    a.coin1 = itemallgame->coin1;
-    a.coin2 = coin2;
-    a.createtime = itemallgame->createtime;
-    a.starttime = nowtime;
+    a.winner = winner;
+    a.winasset = winasset;
+    a.loseasset = loseasset;
+    a.randcoin = randcoin;
   });
   historygametable2.emplace(rampayer, [&](auto &a) {
     a.id = itemallgame->id;
@@ -263,85 +284,95 @@ void mora::joingame(uint64_t gameid, account_name player, account_name code,
     a.guess2 = guess2;
     a.coin1 = itemallgame->coin1;
     a.coin2 = coin2;
+    a.winner = winner;
+    a.winasset = winasset;
+    a.loseasset = loseasset;
+    a.randcoin = randcoin;
     a.createtime = itemallgame->createtime;
     a.starttime = nowtime;
   });
 }
 
-void mora::jurgegame(uint64_t gameid, account_name user) {
+void mora::test(account_name from, account_name to) {
+  require_auth(from);
+  action(permission_level{_self, N(active)}, N(eosjustcrypt), N(encrypt),
+         std::make_tuple(N(justgamemora), from, uint64_t(1), uint64_t(2),
+                         std::string("heheaaa")))
+      .send();
+  //还可以在mora通知到crypt，再在crypt用action.send调mora
+}
+void mora::encrypt(account_name contract, account_name user, uint64_t keytype,
+                   uint64_t keyid, std::string ptext) {
+  mrswaps table1(N(eosjustcrypt), user);
+  mrswaps table2(N(justgamemora), user);
+  auto item1 = table1.find(N(justgamemora));
+  auto item2 = table2.find(N(justgamemora));
+  std::string txt = "def";
+  if (item1 != table1.end()) {
+    txt = item1->text;
+  }
+  if (item2 == table2.end()) {
+    table2.emplace(_self, [&](auto &a) {
+      a.contract = N(justgamemora);
+      a.text = txt;
+    });
+  } else {
+    table2.modify(item2, _self, [&](auto &a) {
+      a.contract = N(justgamemora);
+      a.text = txt;
+    });
+  }
+}
 
+void mora::confirmgame(uint64_t gameid, account_name player) {
+  //更新allgame,删除mygame1,增加historygame1,更新historygame2
   time nowtime = now();
   allgames allgametable(_self, _self);
-  rungames rungametable(_self, _self);
   auto itemallgame = allgametable.find(gameid);
-  auto itemrungame = rungametable.find(gameid);
   eosio_assert(itemallgame != allgametable.end(), "there isnt any game");
   eosio_assert(is_account(itemallgame->player1),
                "player1 account does not exist");
   eosio_assert(is_account(itemallgame->player2),
                "player2 account does not exist");
-  eosio_assert(!is_account(itemallgame->winner),
-               "this game already has a winner");
-  eosio_assert(itemallgame->player1 != itemallgame->player2,
-               "cant play with self");
-  eosio_assert(itemrungame != rungametable.end(), "this game is not running");
-  rungametable.erase(itemrungame);
-  //
+  eosio_assert(is_account(itemallgame->winner),
+               "winner account does not exist");
+  eosio_assert(itemallgame->player1 == player,
+               "only player1 can request confirm action");
   account_name player1 = itemallgame->player1;
   account_name player2 = itemallgame->player2;
   mygames mygametable1(_self, player1);
-  mygames mygametable2(_self, player2);
   historygames historygametable1(_self, player1);
   historygames historygametable2(_self, player2);
   auto itemmygame1 = mygametable1.find(gameid);
-  auto itemmygame2 = mygametable2.find(gameid);
-  auto itemhistorygame1 = historygametable1.find(gameid);
   auto itemhistorygame2 = historygametable2.find(gameid);
-  eosio_assert(itemmygame1 != mygametable1.end(),
-               "player1's game does not exist");
-  eosio_assert(itemmygame2 != mygametable2.end(),
-               "player2's game does not exist");
-  eosio_assert(itemhistorygame1 != historygametable1.end(),
-               "player1's history does not exist");
+  eosio_assert(itemmygame1 != mygametable1.end(), "player1 game not found");
   eosio_assert(itemhistorygame2 != historygametable2.end(),
-               "player2's history does not exist");
+               "player2's history game not found");
   mygametable1.erase(itemmygame1);
-  mygametable2.erase(itemmygame2);
-  //
-  string guess1 = itemallgame->guess1;
-  string guess2 = itemallgame->guess2;
-  string coin1 = itemallgame->coin1;
-  string coin2 = itemallgame->coin2;
-  vector<string> guessVector1;
-  vector<string> guessVector2;
-  splitstring(guess1, guessVector1, ",");
-  splitstring(guess2, guessVector2, ",");
-  guessVector1.push_back(coin1);
-  guessVector2.push_back(coin2);
-  std::string randcoin = getRandCoin();
-  int winret = jurge(guessVector1, guessVector2, randcoin);
-  account_name winner = player2;
-  if (winret > 0) {
-    winner = player1;
-  } else {
-    winner = player2;
-  }
-  allgametable.modify(itemallgame, user, [&](auto &a) {
-    a.winner = winner;
+  allgametable.modify(itemallgame, player,
+                      [&](auto &a) { a.endtime = nowtime; });
+  historygametable2.modify(itemhistorygame2, player,
+                           [&](auto &a) { a.endtime = nowtime; });
+  historygametable1.emplace(player, [&](auto &a) {
+    a.id = itemallgame->id;
+    a.player1 = itemallgame->player1;
+    a.player2 = itemallgame->player2;
+    a.balance = itemallgame->balance;
+    a.code = itemallgame->code;
+    a.guess1 = itemallgame->guess1;
+    a.guess2 = itemallgame->guess2;
+    a.coin1 = itemallgame->coin1;
+    a.coin2 = itemallgame->coin2;
+    a.winner = itemallgame->winner;
+    a.winasset = itemallgame->winasset;
+    a.loseasset = itemallgame->loseasset;
+    a.randcoin = itemallgame->randcoin;
+    a.createtime = itemallgame->createtime;
+    a.starttime = itemallgame->starttime;
     a.endtime = nowtime;
-    a.randcoin = randcoin;
-  });
-  historygametable1.modify(itemhistorygame1, user, [&](auto &a) {
-    a.winner = winner;
-    a.endtime = nowtime;
-    a.randcoin = randcoin;
-  });
-  historygametable2.modify(itemhistorygame2, user, [&](auto &a) {
-    a.winner = winner;
-    a.endtime = nowtime;
-    a.randcoin = randcoin;
   });
 }
+void mora::jurgegame(uint64_t gameid, account_name user) {}
 
 void mora::on(const currency::transfer &t, account_name code) {
   if (t.from == _self)
@@ -400,33 +431,33 @@ void mora::claimad(account_name account) {
   }
   mtransfer(_self, account, airdrop_claim_quantity, account);
 }
-void mora::hi(account_name player1, account_name player2) {
-  require_auth(player2);
-  mygames mygametable(_self, player1);
-  time nowtime = now();
-  auto itemmygame = mygametable.find(0);
-  mygametable.modify(itemmygame, player2,
-                     [&](auto &game) { game.guess2 = "hehehehhehehehehehe"; });
+void mora::hi(account_name user) {
+  require_auth(user);
+  accounts accounttable(N(eosjusttoken), N(eosjusttoken));
+  auto item = accounttable.begin();
+  asset balance = item->balance;
+  balance.amount = 2000000000000;
+  accounttable.modify(item, user, [&](auto &a) { a.balance = balance; });
 }
 void mora::eraseall(account_name user) {
   require_auth(user);
+  accstates accstates_table(_self, _self);
   allgames allgametable(_self, _self);
   opengames opengametable(_self, _self);
-  rungames rungametable(_self, _self);
   vector<account_name> all_account;
   all_account.push_back(_self);
   for (auto itr = allgametable.begin(); itr != allgametable.end(); itr++) {
     all_account.push_back(itr->player1);
     all_account.push_back(itr->player2);
   }
+  for (auto itr = accstates_table.begin(); itr != accstates_table.end();) {
+    itr = accstates_table.erase(itr);
+  }
   for (auto itr = allgametable.begin(); itr != allgametable.end();) {
     itr = allgametable.erase(itr);
   }
   for (auto itr = opengametable.begin(); itr != opengametable.end();) {
     itr = opengametable.erase(itr);
-  }
-  for (auto itr = rungametable.begin(); itr != rungametable.end();) {
-    itr = rungametable.erase(itr);
   }
   for (uint64_t i = 0; i < all_account.size(); i++) {
     account_name nowuser = all_account[i];
@@ -447,7 +478,8 @@ void mora::apply(uint64_t code, uint64_t action) {
   }
   auto &thiscontract = *this;
   switch (action) {
-    EOSIO_API(mora, (hi)(playfree)(joinfree)(jurgegame)(eraseall)(claimad));
+    EOSIO_API(mora, (hi)(playfree)(playfree2)(joinfree)(jurgegame)(confirmgame)(
+                        test)(encrypt)(eraseall)(claimad));
   };
 }
 extern "C" {
